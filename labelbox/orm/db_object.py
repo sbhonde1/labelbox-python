@@ -56,7 +56,14 @@ class DbObject(Entity):
                 DB type.
         """
         for field in self.fields():
-            value = field_values[field.graphql_name]
+            # Extract field value from the response
+            if "." in field.graphql_name:
+                # Support for related/flattened fields.
+                relationship, subfield = field.graphql_name.split(".")
+                value = fields_values[relationship][subfield]
+            else:
+                value = field_values[field.graphql_name]
+
             if field.field_type == Field.Type.DateTime and value is not None:
                 try:
                     value = datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ")

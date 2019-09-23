@@ -25,6 +25,9 @@ class Webhook(DbObject, Updateable):
     topics = Field.String("topics")
     status = Field.String("status")
 
+    notifications = Relationship.ToMany("WebhookNotification", False,
+                                        "notifications")
+
     @staticmethod
     def create(client, topics, url, secret, project):
         """ Creates a Webhook.
@@ -79,3 +82,17 @@ class Webhook(DbObject, Updateable):
         res = self.client.execute(query_str)
         res = res["data"]["updateWebhook"]
         self._set_field_values(res)
+
+
+class WebhookNotification(DbObject):
+    """ Represents a notification sent by Labelbox sent to the client's server
+    due to a Webhook set for a specific action. """
+
+    updated_at = Field.DateTime("updated_at")
+    created_at = Field.DateTime("created_at")
+
+    request_headers = Field.String("request_headers")
+    response_headers = Field.String("response_headers")
+    response_body = Field.String("response_body")
+    response_code = Field.Int("response_code")
+    payload = Field.String("payload", "webhookNotificationPayload.requestBody")

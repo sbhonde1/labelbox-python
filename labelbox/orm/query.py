@@ -1,3 +1,4 @@
+from collections import defaultdict
 from itertools import chain
 
 from labelbox import utils
@@ -42,7 +43,21 @@ def results_query_part(entity):
     Args:
         entity (type): The entity which needs fetching.
     """
-    return " ".join(field.graphql_name for field in entity.fields())
+    fields = []
+
+    # Map {relationship_name: [subfield1, subfield2]}
+    related_subfields = defaultdict(list)
+
+    for field_name in (f.graphql_name for f in entity.fields()):
+        if "." in field_name:
+            relationship, subfield = field_name.split(".")
+            related_subfields[relationship].append(subfield)
+        else:
+            fields.append(field_name)
+
+    return " ".join(
+        ["%s {%s}" % (r, " ".join(s)) for r, s in related_subfields.items()]
+        + fields)
 
 
 class Query:
