@@ -1,7 +1,10 @@
+from collections import namedtuple
 from datetime import datetime, timezone
 import json
 import logging
 import os
+import re
+import time
 
 import requests
 import requests.exceptions
@@ -24,20 +27,102 @@ logger = logging.getLogger(__name__)
 _LABELBOX_API_KEY = "LABELBOX_API_KEY"
 
 
+class AutoRetry:
+    """ Encapsulates info necessary for determining if a query should be
+    automatically retried after failure (filter predicates) and how the
+    exponential backoff should be performed (maximum retry count and wait-time
+    base value).
+    """
+
+    class FilterPredicate(namedtuple("FilterPredicate",
+                                     "exception_type message_regex params")):
+        """
+        Evaluates if a given Exception (caught during query execution)
+        warrants an execution retry. Composed of three criteria, all of which
+        must be satisfied for this predicate to warrant a retry:
+            - exception type
+            - regex to be matched against the message
+            - a dict of key-value pairs to match exception attributes
+        A None value passed for any of the criteria means that criteria should
+        be ignored.
+
+        Attributes:
+            exception_type (type): Class of exception.
+            message_regex (str): Regex pattern to match the exception message.
+                If present and exception message is None, the predicate fails.
+            params (dict): Key-value pairs to match against exception
+                attributes. Every key-value pair must be matched for this
+                predicate to succeed.
+        """
+        def matches(self, exception):
+            exception_type, message_filter, params = self
+
+            if exception_type and type(exception) != exception_type:
+                return False
+
+            if message_filter:
+                if exception.message is None:
+                    return False
+                if re.match(message_filter, exception.message) is None:
+                    return False
+
+            if params:
+                if not all(getattr(exception, key, None) == value
+                           for key, value in params):
+                    return False
+
+            return True
+
+    # The default filter predicates
+    DEFAULT_FILTER_PREDICATES = [
+        FilterPredicate(labelbox.exceptions.BadResponseError,
+                        "upstream connect error", {"status_code": 503}),
+    ]
+
+    def __init__(self, filter_predicates=DEFAULT_FILTER_PREDICATES,
+                 max_retries=5, wait_period_base=4.0):
+        """
+        Args:
+            filter_predicates (iterable of FilterPredicate): Predicates of
+                which at least one must succeed (return True) for a retry
+                to be attempted.
+            max_retries (int): The maximum number of retry attempts.
+            wait_period_base (float): The base for the wait period between two
+                retries, in milliseconds. The wait period is calculated as:
+                wait_period_base ^ retry_attempt_number.
+        """
+        self.filter_predicates = filter_predicates
+        self.max_retries = max_retries
+        self.wait_period_base = wait_period_base
+
+    def should_retry(self, exception):
+        """ Evalutes if the query should be retried after the given exception
+        has been raised.
+
+        Args:
+            exception (Exception): The exception that has been raised.
+        """
+        return any(fp.matches(exception) for fp in self.filter_predicates)
+
+
 class Client:
     """ A Labelbox client. Contains info necessary for connecting to
     a Labelbox server (URL, authentication key). Provides functions for
     querying and creating top-level data objects (Projects, Datasets).
     """
 
+
     def __init__(self, api_key=None,
-                 endpoint='https://api.labelbox.com/graphql'):
+                 endpoint='https://api.labelbox.com/graphql',
+                 auto_retry=AutoRetry()):
         """ Creates and initializes a Labelbox Client.
 
         Args:
             api_key (str): API key. If None, the key is obtained from
                 the "LABELBOX_API_KEY" environment variable.
             endpoint (str): URL of the Labelbox server to connect to.
+            auto_retry (AutoRetry): Determines if and how query execution
+                should be retried after failure.
         Raises:
             labelbox.exceptions.AuthenticationError: If no `api_key`
                 is provided as an argument or via the environment
@@ -49,6 +134,7 @@ class Client:
                     "Labelbox API key not provided")
             api_key = os.environ[_LABELBOX_API_KEY]
         self.api_key = api_key
+        self.auto_retry = auto_retry
 
         logger.info("Initializing Labelbox client at '%s'", endpoint)
 
@@ -61,6 +147,9 @@ class Client:
         """ Sends a request to the server for the execution of the
         given query. Checks the response for errors and wraps errors
         in appropriate labelbox.exceptions.LabelboxError subtypes.
+
+        Performs auto-retries with exponential backoff which is parameterized
+        by the `AutoRetry` object passed during `Client` initialization.
 
         Args:
             query (str): The query to execute.
@@ -84,6 +173,23 @@ class Client:
             labelbox.exceptions.LabelboxError: If an unknown error of any
                 kind occurred.
         """
+        retries = 0
+        while True:
+            try:
+                return self._execute_without_retries(query, params, timeout)
+            except Exception as e:
+                if retries >= self.auto_retry.max_retries:
+                    raise e
+
+                if not self.auto_retry.should_retry(e):
+                    raise e
+
+                retries += 1
+                time.sleep(self.auto_retry.wait_period_base ** (retries) / 1000)
+
+    def _execute_without_retries(self, query, params=None, timeout=10.0):
+        """ Same params like Client.execute. """
+
         logger.debug("Query: %s, params: %r", query, params)
 
         # Convert datetimes to UTC strings.
@@ -104,6 +210,7 @@ class Client:
                                         headers=self.headers,
                                         timeout=timeout)
             logger.debug("Response: %s", response.text)
+
         except requests.exceptions.Timeout as e:
             raise labelbox.exceptions.TimeoutError(str(e))
 
@@ -118,8 +225,8 @@ class Client:
         try:
             response = response.json()
         except:
-            raise labelbox.exceptions.LabelboxError(
-                "Failed to parse response as JSON: %s" % response.text)
+            raise labelbox.exceptions.BadResponseError(
+                response.content.decode(), response.status_code)
 
         errors = response.get("errors", [])
 

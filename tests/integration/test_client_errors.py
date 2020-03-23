@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from labelbox import Project, Dataset, User
+from labelbox import Project, Dataset, User, AutoRetry
 import labelbox.client
 import labelbox.exceptions
 
@@ -101,6 +101,38 @@ def test_invalid_attribute_error(client, rand_gen):
     assert excinfo.value.field == {User.email}
 
     project.delete()
+
+
+def test_retries_and_backoff(client, rand_gen):
+
+    def execute_and_time_error(query):
+        try:
+            t0 = time.time()
+            client.execute(query, check_naming=False)
+        except labelbox.exceptions.LabelboxError as e:
+            t = time.time() - t0
+            return e, t
+
+    # First do a syntax error that's not caught
+    e, t = execute_and_time_error("asda")
+    assert e.message.startswith("Syntax Error")
+    assert t < 1.0
+
+    # Now catch a syntax error
+    client.auto_retry.filter_predicates = [
+        AutoRetry.FilterPredicate(labelbox.exceptions.InvalidQueryError,
+                                  None, None)]
+    e, t = execute_and_time_error("asda")
+    assert e.message.startswith("Syntax Error")
+    assert t > 1.0
+
+    # Test the message text filter
+    client.auto_retry.filter_predicates = [
+        AutoRetry.FilterPredicate(labelbox.exceptions.InvalidQueryError,
+                                  "gggsg", None)]
+    e, t = execute_and_time_error("asda")
+    assert e.message.startswith("Syntax Error")
+    assert t < 1.0
 
 
 def test_api_limit_error(client, rand_gen):

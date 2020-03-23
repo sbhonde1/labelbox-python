@@ -1,6 +1,6 @@
 name = "labelbox"
 
-from labelbox.client import Client
+from labelbox.client import Client, AutoRetry
 from labelbox.schema.project import Project
 from labelbox.schema.dataset import Dataset
 from labelbox.schema.data_row import DataRow

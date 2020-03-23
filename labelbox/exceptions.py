@@ -80,3 +80,11 @@ class ApiLimitError(LabelboxError):
     """ Raised when the user performs too many requests in a short period
     of time. """
     pass
+
+
+class BadResponseError(LabelboxError):
+    """ Raised in case of a bad HTTP response (any response that's doesn't
+    have a 200 status code. """
+    def __init__(self, message, status_code):
+        super().__init__(message)
+        self.status_code = status_code
