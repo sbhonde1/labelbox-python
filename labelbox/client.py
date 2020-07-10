@@ -12,6 +12,7 @@ import labelbox.exceptions
 from labelbox.orm import query
 from labelbox.orm.db_object import DbObject
 from labelbox.pagination import PaginatedCollection
+from labelbox.schema.enums import UploadedFileType
 from labelbox.schema.project import Project
 from labelbox.schema.dataset import Dataset
 from labelbox.schema.user import User
@@ -190,11 +191,12 @@ class Client:
         with open(path, "rb") as f:
             return self.upload_data(data=(basename, f.read(), content_type))
 
-    def upload_data(self, data):
+    def upload_data(self, data, uploaded_file_type: UploadedFileType = UploadedFileType.ASSET):
         """ Uploads the given data (bytes) to Labelbox.
 
         Args:
             data (bytes): The data to upload.
+            uploaded_file_type (UploadedFileType): type of uploaded file
         Returns:
             str, the URL of uploaded data.
         Raises:
@@ -202,11 +204,23 @@ class Client:
         """
         request_data = {
             "operations": json.dumps({
-                "variables": {"file": None, "contentLength": len(data), "sign": False},
-                "query": """mutation UploadFile($file: Upload!, $contentLength: Int!,
-                                            $sign: Boolean) {
-                            uploadFile(file: $file, contentLength: $contentLength,
-                                       sign: $sign) {url filename} } """,}),
+                "variables": {
+                    "file": None,
+                    "contentLength": len(data),
+                    "uploadedFileType": uploaded_file_type,
+                    "sign": False
+                },
+                "query": """
+                mutation UploadFile($file: Upload!, $contentLength: Int!,
+                        $uploadedFileType: UploadedFileType, $sign: Boolean) {
+                    uploadFile(file: $file, contentLength: $contentLength, 
+                            uploadedFileType: $uploadedFileType, sign: $sign) {
+                        url
+                        filename
+                    }
+                }
+                """,
+            }),
             "map": (None, json.dumps({"1": ["variables.file"]})),
             }
         response = requests.post(
@@ -218,7 +232,7 @@ class Client:
 
         try:
             file_data = response.json().get("data", None)
-        except ValueError as e: # response is not valid JSON
+        except ValueError as e:  # response is not valid JSON
             raise labelbox.exceptions.LabelboxError(
                 "Failed to upload, unknown cause", e)
 
