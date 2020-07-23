@@ -191,12 +191,11 @@ class Client:
         with open(path, "rb") as f:
             return self.upload_data(data=(basename, f.read(), content_type))
 
-    def upload_data(self, data, uploaded_file_type: UploadedFileType = UploadedFileType.ASSET):
+    def upload_data(self, data):
         """ Uploads the given data (bytes) to Labelbox.
 
         Args:
             data (bytes): The data to upload.
-            uploaded_file_type (UploadedFileType): type of uploaded file
         Returns:
             str, the URL of uploaded data.
         Raises:
@@ -207,7 +206,6 @@ class Client:
                 "variables": {
                     "file": None,
                     "contentLength": len(data),
-                    "uploadedFileType": uploaded_file_type,
                     "sign": False
                 },
                 "query": """
